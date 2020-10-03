@@ -4,28 +4,28 @@
 // function ... {  -> function definition until next ...
 // method(): foo { -> method definition until next ...
 
-import { DefaultMap } from "./helpers";
-
-const REGEX_METHOD = /(?:\w+ )?(\w+)\([^()]*\): \w+ {/m;
-const REGEX_CALL = /(^|\s+|this\.)(\w+)\([^()]*\)[^:]/m;
+const REGEX_METHOD = /(?:\w+ )?(\w+)\([^()]*\)(?:: \w+)? {(?:})?/m;
+const REGEX_CALL = /(^|\s+|this\.)(\w+)\([^()]*\)[^:]/gm;
 const REGEX_CLASS = /class \w+ {/;
+const REGEX_SPACES = /^[\r\n]*(\s*).*/;
 
 class Call {
-  constructor(public object: string, public fun: string) {}
+  constructor(public object: string, public fun: string) {
+    if (this.object.endsWith(".")) {
+      this.object = this.object.substring(0, this.object.length - 1);
+    }
+  }
 }
 
 class FunctionDef {
   private header = "";
   public name = "";
-  public isPublic = true;
-  constructor(private content: Content) {}
-
-  toString(): string {
-    return this.content.toString();
-  }
+  public visibility = "public";
+  private comments = new Content();
+  private body = new Content();
 
   *calls(): Generator<Call> {
-    const s = this.content.toString();
+    const s = this.body.toString("\n");
     let m = REGEX_CALL.exec(s);
     while (m) {
       yield new Call(m[1], m[2]);
@@ -35,51 +35,106 @@ class FunctionDef {
 
   private _parse() {
     if (this.name === "") {
-      this.header = this.content.lines.splice(0, 1)[0];
+      this.header = this.body.lines.splice(0, 1)[0];
+      const h = this.header.trim();
+      for (const v of ["private", "protected"]) {
+        if (h.startsWith(v)) {
+          this.visibility = v;
+          break;
+        }
+      }
       const m = REGEX_METHOD.exec(this.header);
       if (m) {
         this.name = m[1];
       } else {
         throw new Error("expected function definition in first line");
       }
+      const idx = this.header.indexOf("}");
+      if (idx != -1) {
+        this.body.lines.push(
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          REGEX_SPACES.exec(this.header)![1] + this.header.substring(idx)
+        );
+        this.header = this.header.substring(0, idx);
+      }
     }
   }
 
   public add(line: string) {
-    this.content.lines.push(line);
+    this.body.lines.push(line);
     this._parse();
   }
 
   public removeLast(): string {
-    return this.content.lines.pop()!;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    return this.body.lines.pop()!;
+  }
+
+  public lastItem(): string {
+    return this.body.lines[this.body.lines.length - 1];
   }
 
   public empty(): boolean {
-    return this.content.lines.length == 0;
+    return this.body.lines.length == 0;
+  }
+
+  public finish(prev: FunctionDef) {
+    const last = () => prev.body.lines[prev.body.lines.length - 1].trim();
+    while (prev.body.lines.length > 0 && last() !== "}") {
+      const l = prev.body.lines.splice(prev.body.lines.length - 1, 1)[0];
+      if (l.trim()) {
+        this.comments.lines = [l, ...this.comments.lines];
+      }
+    }
+  }
+
+  public toString(endl: string): string {
+    let res = this.comments.toString(endl);
+    if (this.comments.lines.length > 0) {
+      res += endl;
+    }
+    res += this.header + endl + this.body.toString(endl);
+    return res;
   }
 }
 
 class ClassDef {
-  constructor(private content: Content) {}
+  public header = new Content();
+  public footer = new Content();
   public functions: Array<FunctionDef> = [];
   public add(line: string) {
-    this.content.lines.push(line);
+    this.header.lines.push(line);
   }
   public empty(): boolean {
-    return this.content.lines.length == 0;
+    return this.header.lines.length == 0;
   }
   public finish() {
     if (this.functions.length > 0) {
       const last = this.functions[this.functions.length - 1];
-      this.content.lines.push(last.removeLast());
+      while (this.functions.length > 0) {
+        const l = last.removeLast();
+        if (l.trim()) {
+          this.footer.lines.push(l);
+          if (l.trim() === "}") {
+            break;
+          }
+        }
+      }
     }
+  }
+  public extractMethod(name: string): FunctionDef | undefined {
+    const idx = this.functions.findIndex((f) => f.name == name);
+    if (idx != -1) {
+      return this.functions.splice(idx, 1)[0];
+    }
+    return;
   }
 }
 
 class Content {
   public lines: Array<string> = [];
-  public toString(): string {
-    return this.lines.join("\n");
+  public toString(endl: string): string {
+    return this.lines.join(endl);
   }
 }
 
@@ -94,26 +149,66 @@ class Formatter {
     this._parse();
     let res = this.header.join("\n");
     for (const f of this.functions) {
-      res = res + this.endl + f.toString();
+      res = res + this.endl + f.toString(this.endl);
       // TODO sort functions?
     }
     for (const c of this.classes) {
-      const calls = new DefaultMap<string, Array<string>>(() => []);
-      for (const f of c.functions) {
-        for (const call of f.calls()) {
-          if (call.object === "this") {
-            calls.getDef(f.name).push(call.fun);
-          }
+      const calls = new Set<string>();
+      let ordered: Array<FunctionDef> = [];
+      for (let i = 0; i < c.functions.length; i++) {
+        const f = c.functions[i];
+        if (f.visibility === "public") {
+          ordered.push(c.functions.splice(i, 1)[0]);
+        }
+      }
+
+      // add dependencies depth first
+      // eslint-disable-next-line @typescript-eslint/prefer-for-of
+      for (let j = 0; j < ordered.length; j++) {
+        this._addDeps(calls, c, ordered, ordered[j]);
+      }
+
+      ordered = ordered.concat(c.functions);
+      if (res !== "") {
+        res = res + this.endl;
+      }
+      res = res + c.header.lines.join(this.endl);
+      let first = true;
+      for (const f of ordered) {
+        if (!first) {
+          res = res + this.endl;
+        }
+        res = res + this.endl + f.toString(this.endl);
+
+        first = false;
+      }
+      res = res + this.endl + c.footer.lines.join(this.endl) + this.endl;
+    }
+    return res;
+  }
+
+  private _addDeps(
+    calls: Set<string>,
+    c: ClassDef,
+    ordered: FunctionDef[],
+    f: FunctionDef
+  ) {
+    for (const call of f.calls()) {
+      if (!calls.has(call.fun)) {
+        const m = c.extractMethod(call.fun);
+        if (m !== undefined) {
+          ordered.push(m);
+          this._addDeps(calls, c, ordered, m);
         }
       }
     }
-    return res;
   }
 
   private _parse(): void {
     this.endl = this._determineEndl();
     let currentClass: ClassDef | undefined;
     let currentFunction: FunctionDef | undefined;
+    let prevFunction: FunctionDef | undefined;
     const addFunction = () => {
       if (currentFunction !== undefined && !currentFunction.empty()) {
         if (currentClass === undefined) {
@@ -121,6 +216,11 @@ class Formatter {
         } else {
           currentClass.functions.push(currentFunction);
         }
+        if (prevFunction !== undefined) {
+          currentFunction.finish(prevFunction);
+        }
+        prevFunction = currentFunction;
+        currentFunction = undefined;
       }
     };
     const addClass = () => {
@@ -134,10 +234,10 @@ class Formatter {
     for (const line of this.input.split(this.endl)) {
       if (REGEX_METHOD.exec(line)) {
         addFunction();
-        currentFunction = new FunctionDef(new Content());
+        currentFunction = new FunctionDef();
       } else if (REGEX_CLASS.exec(line)) {
         addClass();
-        currentClass = new ClassDef(new Content());
+        currentClass = new ClassDef();
       }
       if (currentFunction !== undefined) {
         currentFunction.add(line);

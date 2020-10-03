@@ -13,7 +13,7 @@ function formatSelection(textEditor: vscode.TextEditor): void {
             ? document.lineAt(sel.active.line).range
             : sel;
         const lines = document.getText(range);
-        const formatted = format(lines); // TODO
+        const formatted = format(lines);
         editBuilder.replace(range, formatted);
       }
     }); // apply the (accumulated) replacement(s) (if multiple cursors/selections)
