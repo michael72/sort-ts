@@ -81,4 +81,51 @@ function fun3() {
     const actual = format(original);
     actual.should.equal(expected);
   });
+
+  it("should support generators", () => {
+    const original = `class Foo {
+  private _fun3(): void {
+    console.log("done");
+  }
+  private _other(): string {
+    return "world";
+  }
+  private *_gen(): Generator<string> {
+    yield "hello";
+    yield this._other();
+  }
+  fun() {
+    for (const item of this._gen()) {
+      console.log(item);
+    }
+    this._fun3();
+  }
+}
+`;
+
+    const expected = `class Foo {
+  fun() {
+    for (const item of this._gen()) {
+      console.log(item);
+    }
+    this._fun3();
+  }
+
+  private *_gen(): Generator<string> {
+    yield "hello";
+    yield this._other();
+  }
+
+  private _other(): string {
+    return "world";
+  }
+
+  private _fun3(): void {
+    console.log("done");
+  }
+}
+`;
+    const actual = format(original);
+    actual.should.equal(expected);
+  });
 });

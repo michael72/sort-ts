@@ -4,7 +4,7 @@
 // function ... {  -> function definition until next ...
 // method(): foo { -> method definition until next ...
 
-const REGEX_METHOD = /(?:^[\t ]*)(?:(?:private|protected|function|export function) )?(\w+)\([^()]*\)(?:: \w+)? {(?:})?/m;
+const REGEX_METHOD = /(?:^[\t ]*)(?:(?:private|protected|function|export function) )?[*]?(\w+)\([^()]*\)(?:: [\w<>]+)? {(?:})?/m;
 const REGEX_CALL = /(^|\s+|this\.)(\w+)\([^()]*\)[^:]/gm;
 const REGEX_CLASS = /class \w+ {/;
 const REGEX_SPACES = /^[\r\n]*(\s*).*/;
@@ -30,43 +30,49 @@ class FunctionDef {
 
   *calls(): Generator<Call> {
     const s = this.body.toString("\n");
-    let m = REGEX_CALL.exec(s);
-    while (m) {
+    for (const m of s.matchAll(REGEX_CALL)) {
       yield new Call(m[1], m[2]);
-      m = REGEX_CALL.exec(s);
     }
   }
 
   private _parse() {
     if (this.name === "") {
       this.header = this.body.lines.splice(0, 1)[0];
-      const h = this.header.trim();
-      if (this.global) {
-        if (h.startsWith("export")) {
-          this.visibility = "public";
-        }
-      } else {
-        for (const v of ["private", "protected"]) {
-          if (h.startsWith(v)) {
-            this.visibility = v;
-            break;
-          }
-        }
-      }
+      this._checkVisibility();
       const m = REGEX_METHOD.exec(this.header);
       if (m) {
         this.name = m[1];
       } else {
         throw new Error("expected function definition in first line");
       }
-      const idx = this.header.indexOf("}");
-      if (idx != -1) {
-        this.body.lines.push(
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-          REGEX_SPACES.exec(this.header)![1] + this.header.substring(idx)
-        );
-        this.header = this.header.substring(0, idx);
+      this._checkEmptyFunction();
+    }
+  }
+
+  private _checkVisibility() {
+    const h = this.header.trim();
+    if (this.global) {
+      if (h.startsWith("export")) {
+        this.visibility = "public";
       }
+    } else {
+      for (const v of ["private", "protected"]) {
+        if (h.startsWith(v)) {
+          this.visibility = v;
+          break;
+        }
+      }
+    }
+  }
+
+  private _checkEmptyFunction() {
+    const idx = this.header.indexOf("}");
+    if (idx != -1) {
+      this.body.lines.push(
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        REGEX_SPACES.exec(this.header)![1] + this.header.substring(idx)
+      );
+      this.header = this.header.substring(0, idx);
     }
   }
 
@@ -78,10 +84,6 @@ class FunctionDef {
   public removeLast(): string {
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     return this.body.lines.pop()!;
-  }
-
-  public lastItem(): string {
-    return this.body.lines[this.body.lines.length - 1];
   }
 
   public empty(): boolean {
@@ -202,6 +204,7 @@ class Formatter {
   ) {
     for (const call of f.calls()) {
       if (!calls.has(call.fun)) {
+        calls.add(call.fun);
         const m = c.extractMethod(call.fun);
         if (m !== undefined) {
           ordered.push(m);
