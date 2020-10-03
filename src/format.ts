@@ -4,7 +4,7 @@
 // function ... {  -> function definition until next ...
 // method(): foo { -> method definition until next ...
 
-const REGEX_METHOD = /(?:\w+ )?(\w+)\([^()]*\)(?:: \w+)? {(?:})?/m;
+const REGEX_METHOD = /(?:^[\t ]*)(?:(?:private|protected|function|export function) )?(\w+)\([^()]*\)(?:: \w+)? {(?:})?/m;
 const REGEX_CALL = /(^|\s+|this\.)(\w+)\([^()]*\)[^:]/gm;
 const REGEX_CLASS = /class \w+ {/;
 const REGEX_SPACES = /^[\r\n]*(\s*).*/;
@@ -24,6 +24,10 @@ class FunctionDef {
   private comments = new Content();
   private body = new Content();
 
+  constructor(private global: boolean) {
+    this.visibility = global ? "private" : "public";
+  }
+
   *calls(): Generator<Call> {
     const s = this.body.toString("\n");
     let m = REGEX_CALL.exec(s);
@@ -37,10 +41,16 @@ class FunctionDef {
     if (this.name === "") {
       this.header = this.body.lines.splice(0, 1)[0];
       const h = this.header.trim();
-      for (const v of ["private", "protected"]) {
-        if (h.startsWith(v)) {
-          this.visibility = v;
-          break;
+      if (this.global) {
+        if (h.startsWith("export")) {
+          this.visibility = "public";
+        }
+      } else {
+        for (const v of ["private", "protected"]) {
+          if (h.startsWith(v)) {
+            this.visibility = v;
+            break;
+          }
         }
       }
       const m = REGEX_METHOD.exec(this.header);
@@ -102,11 +112,13 @@ class ClassDef {
   public header = new Content();
   public footer = new Content();
   public functions: Array<FunctionDef> = [];
+  constructor(public global: boolean) {}
+
   public add(line: string) {
     this.header.lines.push(line);
   }
   public empty(): boolean {
-    return this.header.lines.length == 0;
+    return this.header.lines.length == 0 && this.functions.length == 0;
   }
   public finish() {
     if (this.functions.length > 0) {
@@ -139,19 +151,14 @@ class Content {
 }
 
 class Formatter {
-  public header: Array<string> = [];
-  public functions: Array<FunctionDef> = [];
   public classes: Array<ClassDef> = [];
   private endl = "\n";
   constructor(private input: string) {}
 
   sort(): string {
     this._parse();
-    let res = this.header.join("\n");
-    for (const f of this.functions) {
-      res = res + this.endl + f.toString(this.endl);
-      // TODO sort functions?
-    }
+    let res = "";
+
     for (const c of this.classes) {
       const calls = new Set<string>();
       let ordered: Array<FunctionDef> = [];
@@ -206,16 +213,12 @@ class Formatter {
 
   private _parse(): void {
     this.endl = this._determineEndl();
-    let currentClass: ClassDef | undefined;
+    let currentClass = new ClassDef(true);
     let currentFunction: FunctionDef | undefined;
     let prevFunction: FunctionDef | undefined;
     const addFunction = () => {
       if (currentFunction !== undefined && !currentFunction.empty()) {
-        if (currentClass === undefined) {
-          this.functions.push(currentFunction);
-        } else {
-          currentClass.functions.push(currentFunction);
-        }
+        currentClass.functions.push(currentFunction);
         if (prevFunction !== undefined) {
           currentFunction.finish(prevFunction);
         }
@@ -225,7 +228,7 @@ class Formatter {
     };
     const addClass = () => {
       addFunction();
-      if (currentClass !== undefined && !currentClass.empty()) {
+      if (!currentClass.empty()) {
         currentClass.finish();
         this.classes.push(currentClass);
       }
@@ -234,17 +237,15 @@ class Formatter {
     for (const line of this.input.split(this.endl)) {
       if (REGEX_METHOD.exec(line)) {
         addFunction();
-        currentFunction = new FunctionDef();
+        currentFunction = new FunctionDef(currentClass.global);
       } else if (REGEX_CLASS.exec(line)) {
         addClass();
-        currentClass = new ClassDef();
+        currentClass = new ClassDef(false);
       }
-      if (currentFunction !== undefined) {
-        currentFunction.add(line);
-      } else if (currentClass === undefined) {
-        this.header.push(line);
-      } else {
+      if (currentFunction === undefined) {
         currentClass.add(line);
+      } else {
+        currentFunction.add(line);
       }
     }
     addClass();

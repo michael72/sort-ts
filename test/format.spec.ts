@@ -51,4 +51,34 @@ describe("format", () => {
     const actual = format(original);
     actual.should.equal(expected);
   });
+
+  it("should sort functions by call chain, exported functions first", () => {
+    const original = `function fun2(): void {
+  fun3();
+}
+
+export function fun1(): void {
+  fun2();
+}
+
+function fun3() {
+  console.log("hello");
+}
+`;
+    const expected = `
+export function fun1(): void {
+  fun2();
+}
+
+function fun2(): void {
+  fun3();
+}
+
+function fun3() {
+  console.log("hello");
+}
+`;
+    const actual = format(original);
+    actual.should.equal(expected);
+  });
 });
