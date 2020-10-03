@@ -4,7 +4,7 @@
 // function ... {  -> function definition until next ...
 // method(): foo { -> method definition until next ...
 
-const REGEX_METHOD = /(?:^[\t ]*)(?:(?:private|protected|function|export function) )?[*]?(\w+)\([^()]*\)(?:: [\w<>]+)? {(?:})?/m;
+const REGEX_METHOD = /(?:^[\t ]*)(?:(?:private|protected|public|function|export function) )?[*]?(\w+)\(/;
 const REGEX_CALL = /(^|\s+|this\.)(\w+)\([^()]*\)[^:]/gm;
 const REGEX_CLASS = /class \w+ {/;
 const REGEX_SPACES = /^[\r\n]*(\s*).*/;
@@ -86,6 +86,10 @@ class FunctionDef {
     return this.body.lines.pop()!;
   }
 
+  public lastItem(): string {
+    return this.body.lines[this.body.lines.length - 1];
+  }
+
   public empty(): boolean {
     return this.body.lines.length == 0;
   }
@@ -98,6 +102,58 @@ class FunctionDef {
         this.comments.lines = [l, ...this.comments.lines];
       }
     }
+  }
+
+  public finished(): boolean {
+    const closing = new Array<string>();
+    const peek = (): string | undefined => {
+      return closing.length == 0 ? undefined : closing[closing.length - 1];
+    };
+    let last = "";
+    let inComment = false;
+    let inString = false;
+    const all = [this.header, ...this.body.lines];
+    for (const line of all) {
+      let inLineComment = false;
+      let inEsc = false;
+      for (const c of line) {
+        if (c === "*" && last === "/") {
+          inComment = true;
+        } else if (c === "/") {
+          if (last === "/") {
+            inLineComment = true;
+          } else if (last === "*") {
+            inComment = false;
+          }
+        } else if (c === "\\" || inEsc) {
+          inEsc = inEsc == false;
+        }
+        if (!inComment && !inLineComment && !inEsc) {
+          if (c === '"' || c === "'" || c === "´") {
+            if (peek() === c) {
+              closing.pop();
+              inString = false;
+            } else {
+              closing.push(c);
+              inString = true;
+            }
+          } else if (!inString) {
+            const brackets = "(){}[]";
+            const idx = brackets.indexOf(c);
+            if (idx !== -1) {
+              const opening = (idx & 1) === 0;
+              if (opening) {
+                closing.push(brackets[idx + 1]);
+              } else if (peek() == c) {
+                closing.pop();
+              }
+            }
+          }
+        }
+        last = c;
+      }
+    }
+    return closing.length == 0;
   }
 
   public toString(endl: string): string {
@@ -125,7 +181,10 @@ class ClassDef {
   public finish() {
     if (this.functions.length > 0) {
       const last = this.functions[this.functions.length - 1];
-      while (this.functions.length > 0) {
+      while (
+        this.functions.length > 0 &&
+        (!this.global || last.lastItem().trim() !== "}")
+      ) {
         const l = last.removeLast();
         if (l.trim()) {
           this.footer.lines.push(l);
@@ -191,7 +250,10 @@ class Formatter {
 
         first = false;
       }
-      res = res + this.endl + c.footer.lines.join(this.endl) + this.endl;
+      if (c.footer.lines.length > 0) {
+        res = res + this.endl + c.footer.lines.join(this.endl);
+      }
+      res = res + this.endl;
     }
     return res;
   }
@@ -238,7 +300,10 @@ class Formatter {
     };
 
     for (const line of this.input.split(this.endl)) {
-      if (REGEX_METHOD.exec(line)) {
+      if (
+        REGEX_METHOD.exec(line) &&
+        (currentFunction == undefined || currentFunction.finished())
+      ) {
         addFunction();
         currentFunction = new FunctionDef(currentClass.global);
       } else if (REGEX_CLASS.exec(line)) {

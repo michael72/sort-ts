@@ -53,16 +53,16 @@ describe("format", () => {
   });
 
   it("should sort functions by call chain, exported functions first", () => {
-    const original = `function fun2(): void {
+    const original = `function fun3() {
+  console.log("}");
+}
+
+function fun2(): void {
   fun3();
 }
 
 export function fun1(): void {
   fun2();
-}
-
-function fun3() {
-  console.log("hello");
 }
 `;
     const expected = `
@@ -75,7 +75,7 @@ function fun2(): void {
 }
 
 function fun3() {
-  console.log("hello");
+  console.log("}");
 }
 `;
     const actual = format(original);
