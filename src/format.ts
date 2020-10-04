@@ -15,7 +15,11 @@ export function format(txt: string): string {
 }
 
 function sortByName(a: FunctionDef, b: FunctionDef): number {
-  return a.name < b.name ? -1 : 1;
+  const filterName = (n: string) => {
+    // constructor sorted in first
+    return n == "constructor" ? " " : n.startsWith("*") ? n.substring(1) : n;
+  };
+  return filterName(a.name) < filterName(b.name) ? -1 : 1;
 }
 
 class Call {
