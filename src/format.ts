@@ -41,66 +41,16 @@ class FunctionDef {
     this.visibility = global ? "private" : "public";
   }
 
-  *calls(): Generator<Call> {
-    const s = this.body.toString("\n");
-    for (const m of s.matchAll(REGEX_CALL)) {
-      yield new Call(m[1], m[2]);
-    }
-  }
-
-  private _parse() {
-    if (this.name === "") {
-      this.header = this.body.lines.splice(0, 1)[0];
-      this._checkVisibility();
-      const m = REGEX_METHOD.exec(this.header);
-      if (m) {
-        this.name = m[1];
-      } else {
-        throw new Error("expected function definition in first line");
-      }
-      this._checkEmptyFunction();
-    }
-  }
-
-  private _checkVisibility() {
-    const h = this.header.trim();
-    if (this.global) {
-      if (h.startsWith("export")) {
-        this.visibility = "public";
-      }
-    } else {
-      for (const v of ["private", "protected"]) {
-        if (h.startsWith(v)) {
-          this.visibility = v;
-          break;
-        }
-      }
-    }
-  }
-
-  private _checkEmptyFunction() {
-    const idx = this.header.indexOf("}");
-    if (idx != -1) {
-      this.body.lines.push(
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        REGEX_SPACES.exec(this.header)![1] + this.header.substring(idx)
-      );
-      this.header = this.header.substring(0, idx);
-    }
-  }
-
   public add(line: string) {
     this.body.lines.push(line);
     this._parse();
   }
 
-  public removeLast(): string {
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    return this.body.lines.pop()!;
-  }
-
-  public lastItem(): string {
-    return this.body.lines[this.body.lines.length - 1];
+  *calls(): Generator<Call> {
+    const s = this.body.toString("\n");
+    for (const m of s.matchAll(REGEX_CALL)) {
+      yield new Call(m[1], m[2]);
+    }
   }
 
   public empty(): boolean {
@@ -169,6 +119,15 @@ class FunctionDef {
     return closing.length == 0;
   }
 
+  public lastItem(): string {
+    return this.body.lines[this.body.lines.length - 1];
+  }
+
+  public removeLast(): string {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    return this.body.lines.pop()!;
+  }
+
   public toString(endl: string): string {
     let res = endl + this.comments.toString(endl);
     if (this.comments.lines.length > 0) {
@@ -176,6 +135,47 @@ class FunctionDef {
     }
     res += this.header + endl + this.body.toString(endl);
     return res + endl;
+  }
+
+  private _parse() {
+    if (this.name === "") {
+      this.header = this.body.lines.splice(0, 1)[0];
+      this._checkVisibility();
+      const m = REGEX_METHOD.exec(this.header);
+      if (m) {
+        this.name = m[1];
+      } else {
+        throw new Error("expected function definition in first line");
+      }
+      this._checkEmptyFunction();
+    }
+  }
+
+  private _checkVisibility() {
+    const h = this.header.trim();
+    if (this.global) {
+      if (h.startsWith("export")) {
+        this.visibility = "public";
+      }
+    } else {
+      for (const v of ["private", "protected"]) {
+        if (h.startsWith(v)) {
+          this.visibility = v;
+          break;
+        }
+      }
+    }
+  }
+
+  private _checkEmptyFunction() {
+    const idx = this.header.indexOf("}");
+    if (idx != -1) {
+      this.body.lines.push(
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        REGEX_SPACES.exec(this.header)![1] + this.header.substring(idx)
+      );
+      this.header = this.header.substring(0, idx);
+    }
   }
 }
 
@@ -188,9 +188,19 @@ class ClassDef {
   public add(line: string) {
     this.header.lines.push(line);
   }
+
   public empty(): boolean {
     return this.header.lines.length == 0 && this.functions.length == 0;
   }
+
+  public extractMethod(name: string): FunctionDef | undefined {
+    const idx = this.functions.findIndex((f) => f.name == name);
+    if (idx != -1) {
+      return this.functions.splice(idx, 1)[0];
+    }
+    return;
+  }
+
   public finish() {
     if (this.functions.length > 0) {
       const last = this.functions[this.functions.length - 1];
@@ -207,13 +217,6 @@ class ClassDef {
         }
       }
     }
-  }
-  public extractMethod(name: string): FunctionDef | undefined {
-    const idx = this.functions.findIndex((f) => f.name == name);
-    if (idx != -1) {
-      return this.functions.splice(idx, 1)[0];
-    }
-    return;
   }
 }
 
@@ -235,6 +238,63 @@ class Formatter {
       .map((c) => this._formatClass(c))
       .join("")
       .substring(1);
+  }
+
+  private _parse(): void {
+    this.endl = this._determineEndl();
+    let currentClass = new ClassDef(true);
+    let currentFunction: FunctionDef | undefined;
+    let prevFunction: FunctionDef | undefined;
+    const addFunction = () => {
+      if (currentFunction !== undefined && !currentFunction.empty()) {
+        currentClass.functions.push(currentFunction);
+        if (prevFunction !== undefined) {
+          currentFunction.finish(prevFunction);
+        }
+        prevFunction = currentFunction;
+        currentFunction = undefined;
+      }
+    };
+    const addClass = () => {
+      addFunction();
+      if (!currentClass.empty()) {
+        currentClass.finish();
+        this.classes.push(currentClass);
+      }
+    };
+
+    for (const lines of this.input.split(this.endl)) {
+      for (const line of lines.split("\n")) {
+        if (!line.startsWith("//")) {
+          if (
+            REGEX_METHOD.exec(line) &&
+            (currentFunction == undefined || currentFunction.finished())
+          ) {
+            addFunction();
+            currentFunction = new FunctionDef(currentClass.global);
+          } else if (REGEX_CLASS.exec(line)) {
+            addClass();
+            currentClass = new ClassDef(false);
+          }
+        }
+        if (currentFunction === undefined) {
+          currentClass.add(line);
+        } else {
+          currentFunction.add(line);
+        }
+      }
+    }
+    addClass();
+  }
+
+  private _determineEndl(): string {
+    if (this.input.includes("\r")) {
+      if (this.input.includes("\n")) {
+        return "\r\n";
+      }
+      return "\r";
+    }
+    return "\n";
   }
 
   private _formatClass(c: ClassDef): string {
@@ -299,62 +359,5 @@ class Formatter {
       return ordered.concat(this._collectOrdered(c, m, calls));
     }
     return ordered;
-  }
-
-  private _parse(): void {
-    this.endl = this._determineEndl();
-    let currentClass = new ClassDef(true);
-    let currentFunction: FunctionDef | undefined;
-    let prevFunction: FunctionDef | undefined;
-    const addFunction = () => {
-      if (currentFunction !== undefined && !currentFunction.empty()) {
-        currentClass.functions.push(currentFunction);
-        if (prevFunction !== undefined) {
-          currentFunction.finish(prevFunction);
-        }
-        prevFunction = currentFunction;
-        currentFunction = undefined;
-      }
-    };
-    const addClass = () => {
-      addFunction();
-      if (!currentClass.empty()) {
-        currentClass.finish();
-        this.classes.push(currentClass);
-      }
-    };
-
-    for (const lines of this.input.split(this.endl)) {
-      for (const line of lines.split("\n")) {
-        if (!line.startsWith("//")) {
-          if (
-            REGEX_METHOD.exec(line) &&
-            (currentFunction == undefined || currentFunction.finished())
-          ) {
-            addFunction();
-            currentFunction = new FunctionDef(currentClass.global);
-          } else if (REGEX_CLASS.exec(line)) {
-            addClass();
-            currentClass = new ClassDef(false);
-          }
-        }
-        if (currentFunction === undefined) {
-          currentClass.add(line);
-        } else {
-          currentFunction.add(line);
-        }
-      }
-    }
-    addClass();
-  }
-
-  private _determineEndl(): string {
-    if (this.input.includes("\r")) {
-      if (this.input.includes("\n")) {
-        return "\r\n";
-      }
-      return "\r";
-    }
-    return "\n";
   }
 }
