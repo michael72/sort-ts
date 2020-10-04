@@ -88,32 +88,34 @@ class FunctionDef {
           } else if (last === "*") {
             inComment = false;
           }
-        } else if (c === "\\" || inEsc) {
-          inEsc = inEsc == false;
         }
-        if (!inComment && !inLineComment && !inEsc) {
-          if (c === '"' || c === "'" || c === "´") {
-            if (peek() === c) {
-              closing.pop();
-              inString = false;
-            } else if (!inString) {
-              closing.push(c);
-              inString = true;
-            }
-          } else if (!inString) {
-            const brackets = "(){}[]";
-            const idx = brackets.indexOf(c);
-            if (idx !== -1) {
-              const opening = (idx & 1) === 0;
-              if (opening) {
-                closing.push(brackets[idx + 1]);
-              } else if (peek() == c) {
+        if (inEsc || c === "\\") {
+          inEsc = inEsc == false;
+        } else {
+          if (!inComment && !inLineComment && !inEsc) {
+            if (c === '"' || c === "'" || c === "´") {
+              if (peek() === c) {
                 closing.pop();
+                inString = false;
+              } else if (!inString) {
+                closing.push(c);
+                inString = true;
+              }
+            } else if (!inString) {
+              const brackets = "(){}[]";
+              const idx = brackets.indexOf(c);
+              if (idx !== -1) {
+                const opening = (idx & 1) === 0;
+                if (opening) {
+                  closing.push(brackets[idx + 1]);
+                } else if (peek() == c) {
+                  closing.pop();
+                }
               }
             }
           }
+          last = c;
         }
-        last = c;
       }
     }
     return closing.length == 0;
