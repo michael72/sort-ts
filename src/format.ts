@@ -31,7 +31,7 @@ class Formatter {
     return classes
       .map((c) => new FormatClass(c, parser.endl).format())
       .join("")
-      .substring(1);
+      .substring(parser.endl.length);
   }
 }
 
@@ -84,11 +84,11 @@ class FormatClass {
   }
 
   private _moveToOrdered(call: Call): Array<FunctionDef> {
-    const ordered = new Array<FunctionDef>();
+    let ordered = new Array<FunctionDef>();
     const m = this.c.extractMethod(call.fun);
     if (m !== undefined) {
       ordered.push(m);
-      return ordered.concat(this._collectOrdered(m));
+      ordered = ordered.concat(this._collectOrdered(m));
     }
     return ordered;
   }

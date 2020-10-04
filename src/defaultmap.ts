@@ -1,29 +1,4 @@
 /**
- * Perform string replacement for all occurrences of a search string.
- *
- * @param target string to work on
- * @param search the string to be replaced
- * @param repl the replacement
- * @return the replaced target string.
- */
-export function replaceAll(
-  target: string,
-  search: string,
-  repl: string
-): string {
-  const i = target.indexOf(search);
-  return i === -1
-    ? target
-    : target.slice(0, i) +
-        repl +
-        replaceAll(
-          target.slice(i + search.length, target.length),
-          search,
-          repl
-        );
-}
-
-/**
  * Map class that with a getter function that returns the
  * default value given by the callback function used in the
  * constructor.

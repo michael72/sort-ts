@@ -4,6 +4,23 @@ import { format } from "../src/format";
 import { should } from "chai";
 should();
 
+/**
+ * Perform string replacement for all occurrences of a search string.
+ *
+ * @param target string to work on
+ * @param search the string to be replaced
+ * @param repl the replacement
+ * @return the replaced target string.
+ */
+function replaceAll(target: string, search: string, repl: string): string {
+  const i = target.indexOf(search);
+  return i === -1
+    ? target
+    : target.slice(0, i) +
+        repl +
+        replaceAll(target.slice(i + search.length), search, repl);
+}
+
 describe("format", () => {
   it("should format members of a class in call order", () => {
     const original = `class Foo {
@@ -125,8 +142,9 @@ function fun3() {
   }
 }
 `;
-    const actual = format(original);
-    actual.should.equal(expected);
+    // also check that \r stays \r\n
+    const actual = format(replaceAll(original, "\n", "\r"));
+    actual.should.equal(replaceAll(expected, "\n", "\r"));
   });
 
   it("should sort public functions in alphabetical order, constructors going first", () => {
@@ -141,6 +159,7 @@ function fun3() {
 
   constructor(private _items: Array<string>) { }
 
+  // comment for remove
   remove(a: string) {
     /* some other comment } */
     this._items.splice(this._items.indexOf(a), 1);
@@ -167,14 +186,15 @@ function fun3() {
     }
   }
 
+  // comment for remove
   remove(a: string) {
     /* some other comment } */
     this._items.splice(this._items.indexOf(a), 1);
   }
 }
 `;
-
-    const actual = format(original);
-    actual.should.equal(expected);
+    // also check that \r\n stays \r\n
+    const actual = format(replaceAll(original, "\n", "\r\n"));
+    actual.should.equal(replaceAll(expected, "\n", "\r\n"));
   });
 });
