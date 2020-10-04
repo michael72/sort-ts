@@ -9,6 +9,15 @@ const REGEX_CALL = /(^|\s+|this\.)(\w+)\([^()]*\)[^:]/gm;
 const REGEX_CLASS = /class \w+ {/;
 const REGEX_SPACES = /^[\r\n]*(\s*).*/;
 
+export function format(txt: string): string {
+  const formatter = new Formatter(txt);
+  return formatter.sort();
+}
+
+function sortByName(a: FunctionDef, b: FunctionDef): number {
+  return a.name < b.name ? -1 : 1;
+}
+
 class Call {
   constructor(public object: string, public fun: string) {
     if (this.object.endsWith(".")) {
@@ -133,7 +142,7 @@ class FunctionDef {
             if (peek() === c) {
               closing.pop();
               inString = false;
-            } else {
+            } else if (!inString) {
               closing.push(c);
               inString = true;
             }
@@ -157,12 +166,12 @@ class FunctionDef {
   }
 
   public toString(endl: string): string {
-    let res = this.comments.toString(endl);
+    let res = endl + this.comments.toString(endl);
     if (this.comments.lines.length > 0) {
       res += endl;
     }
     res += this.header + endl + this.body.toString(endl);
-    return res;
+    return res + endl;
   }
 }
 
@@ -218,62 +227,74 @@ class Formatter {
 
   sort(): string {
     this._parse();
-    let res = "";
+    return this.classes
+      .map((c) => this._formatClass(c))
+      .join("")
+      .substring(1);
+  }
 
-    for (const c of this.classes) {
-      const calls = new Set<string>();
-      let ordered: Array<FunctionDef> = [];
-      for (let i = 0; i < c.functions.length; i++) {
-        const f = c.functions[i];
-        if (f.visibility === "public") {
-          ordered.push(c.functions.splice(i, 1)[0]);
-        }
-      }
+  private _formatClass(c: ClassDef): string {
+    const res =
+      this.endl +
+      c.header.lines.join(this.endl) +
+      this._orderFunctions(c)
+        .map((f) => f.toString(this.endl))
+        .join("") +
+      (c.footer.lines.length > 0
+        ? c.footer.lines.join(this.endl) + this.endl
+        : "");
 
-      // add dependencies depth first
-      // eslint-disable-next-line @typescript-eslint/prefer-for-of
-      for (let j = 0; j < ordered.length; j++) {
-        this._addDeps(calls, c, ordered, ordered[j]);
-      }
-
-      ordered = ordered.concat(c.functions);
-      if (res !== "") {
-        res = res + this.endl;
-      }
-      res = res + c.header.lines.join(this.endl);
-      let first = true;
-      for (const f of ordered) {
-        if (!first) {
-          res = res + this.endl;
-        }
-        res = res + this.endl + f.toString(this.endl);
-
-        first = false;
-      }
-      if (c.footer.lines.length > 0) {
-        res = res + this.endl + c.footer.lines.join(this.endl);
-      }
-      res = res + this.endl;
-    }
     return res;
   }
 
-  private _addDeps(
-    calls: Set<string>,
+  private _orderFunctions(c: ClassDef) {
+    let ordered = this._movePublicToOrdered(c);
+    const calls = new Set<string>();
+    // add dependencies depth first
+    // eslint-disable-next-line @typescript-eslint/prefer-for-of
+    for (let i = 0; i < ordered.length; i++) {
+      ordered = ordered.concat(this._collectOrdered(c, ordered[i], calls));
+    }
+    // add remaining functions sorted by name
+    return ordered.concat(c.functions.sort(sortByName));
+  }
+
+  private _movePublicToOrdered(c: ClassDef) {
+    const ordered = c.functions.filter((f) => f.visibility === "public");
+    for (const f of ordered) {
+      // remove already ordered from c.functions
+      c.functions.splice(c.functions.indexOf(f), 1);
+    }
+    return ordered.sort(sortByName);
+  }
+
+  private _collectOrdered(
     c: ClassDef,
-    ordered: FunctionDef[],
-    f: FunctionDef
-  ) {
+    f: FunctionDef,
+    calls: Set<string>
+  ): Array<FunctionDef> {
+    let ordered = new Array<FunctionDef>();
     for (const call of f.calls()) {
       if (!calls.has(call.fun)) {
         calls.add(call.fun);
-        const m = c.extractMethod(call.fun);
-        if (m !== undefined) {
-          ordered.push(m);
-          this._addDeps(calls, c, ordered, m);
-        }
+        ordered = ordered.concat(this._moveToOrdered(c, call, calls));
       }
     }
+    return ordered;
+  }
+
+  private _moveToOrdered(
+    c: ClassDef,
+    call: Call,
+    calls: Set<string>
+  ): Array<FunctionDef> {
+    const ordered = new Array<FunctionDef>();
+    const m = c.extractMethod(call.fun);
+    if (m !== undefined) {
+      ordered.push(m);
+      return ordered.concat(this._collectOrdered(c, m, calls));
+    }
+    return ordered;
   }
 
   private _parse(): void {
@@ -299,21 +320,25 @@ class Formatter {
       }
     };
 
-    for (const line of this.input.split(this.endl)) {
-      if (
-        REGEX_METHOD.exec(line) &&
-        (currentFunction == undefined || currentFunction.finished())
-      ) {
-        addFunction();
-        currentFunction = new FunctionDef(currentClass.global);
-      } else if (REGEX_CLASS.exec(line)) {
-        addClass();
-        currentClass = new ClassDef(false);
-      }
-      if (currentFunction === undefined) {
-        currentClass.add(line);
-      } else {
-        currentFunction.add(line);
+    for (const lines of this.input.split(this.endl)) {
+      for (const line of lines.split("\n")) {
+        if (!line.startsWith("//")) {
+          if (
+            REGEX_METHOD.exec(line) &&
+            (currentFunction == undefined || currentFunction.finished())
+          ) {
+            addFunction();
+            currentFunction = new FunctionDef(currentClass.global);
+          } else if (REGEX_CLASS.exec(line)) {
+            addClass();
+            currentClass = new ClassDef(false);
+          }
+        }
+        if (currentFunction === undefined) {
+          currentClass.add(line);
+        } else {
+          currentFunction.add(line);
+        }
       }
     }
     addClass();
@@ -328,9 +353,4 @@ class Formatter {
     }
     return "\n";
   }
-}
-
-export function format(txt: string): string {
-  const formatter = new Formatter(txt);
-  return formatter.sort();
 }
